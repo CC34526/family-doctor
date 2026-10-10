@@ -243,6 +243,8 @@ textarea {
 
 .primary:disabled { opacity: 0.45; cursor: not-allowed; }
 
+.scope-note { margin: -4px 0 12px; font-size: 0.86rem; }
+
 .chat {
   height: calc(100dvh - 168px);
   min-height: 560px;
@@ -250,6 +252,13 @@ textarea {
   flex-direction: column;
   overflow: hidden;
 }
+
+.chat-head {
+  padding: 16px 22px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-head h2 { margin: 0; font-size: 1.7rem; }
 
 .booting, .key-card {
   margin: auto;
@@ -307,6 +316,19 @@ textarea {
 
 .bubble p { margin: 0; white-space: pre-wrap; }
 
+.shot {
+  display: block;
+  width: min(240px, 100%);
+  border-radius: 12px;
+  margin: 0 0 8px;
+}
+
+.photo-note {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  opacity: 0.85;
+}
+
 .turn.mine .bubble {
   background: var(--pine);
   color: var(--cream);
@@ -344,6 +366,42 @@ textarea {
 .composer-row { display: flex; gap: 10px; align-items: flex-end; }
 
 .composer textarea { flex: 1; }
+
+.attach {
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--pine);
+}
+
+.attach svg { width: 22px; height: 22px; }
+
+.attach:hover { background: var(--mist); }
+
+.attach:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.staged {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.staged img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+}
+
+.staged p { margin: 0 0 4px; font-size: 0.92rem; }
 
 .error {
   margin: 0 0 10px;

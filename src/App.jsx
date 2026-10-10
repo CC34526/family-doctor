@@ -32,6 +32,11 @@ const PROMPTS = [
     label: 'Stomach bug at home',
     text: 'Several of us have a stomach bug. How should we handle fluids, food, and keeping it from spreading?',
   },
+  {
+    subject: 'me',
+    label: 'A way of eating',
+    text: 'I have been skipping breakfast and eating most of my food late at night. Is that a healthy pattern?',
+  },
 ];
 
 const MODEL_LABELS = {
@@ -52,7 +57,7 @@ function greeting() {
     role: 'assistant',
     local: true,
     content:
-      'Tell me what is going on, who it is happening to, and when it started. I can help you sort home care from a call to the clinic. I cannot examine anyone or make a diagnosis.',
+      "Hi, my name's Maddie. I can help with health questions — symptoms, injuries, mental health, sleep, and whether a meal or a way of eating is a healthy one. If a photo would help, attach it. I will look carefully, lay out the possibilities, and once you tell me which one fits, we can talk through what to do next. Tell me what is going on, who it is happening to, and when it started. I cannot examine anyone in person or make a diagnosis.",
   };
 }
 
@@ -63,7 +68,10 @@ function readStoredMessages() {
     const clean = parsed
       .filter((message) => message && (message.role === 'user' || message.role === 'assistant') && typeof message.content === 'string' && typeof message.id === 'string')
       .slice(-40);
-    if (clean.some((message) => message.role === 'user')) return clean;
+    if (clean.some((message) => message.role === 'user')) {
+      if (clean[0]?.id === 'greeting' || clean[0]?.local) return [greeting(), ...clean.slice(1)];
+      return [greeting(), ...clean];
+    }
   } catch {
     /* start a fresh visit */
   }
@@ -95,6 +103,54 @@ function RichText({ text }) {
   });
 }
 
+function compressPhoto(file) {
+  const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+  if (!allowed.includes(file.type)) {
+    return Promise.reject(new Error('Choose a JPEG, PNG, or WebP photo.'));
+  }
+  if (file.size > 12 * 1024 * 1024) {
+    return Promise.reject(new Error('That photo is too large. Try one under 12 MB.'));
+  }
+
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        let dataUrl = shrinkPhoto(img, 1600, 0.82);
+        if (!dataUrl || dataUrl.length > 1_200_000) dataUrl = shrinkPhoto(img, 1280, 0.72);
+        if (!dataUrl || dataUrl.length > 1_200_000) dataUrl = shrinkPhoto(img, 960, 0.66);
+        if (!dataUrl || dataUrl.length > 1_200_000) {
+          reject(new Error('That photo is still too large. Try a smaller one.'));
+          return;
+        }
+        resolve({ dataUrl, name: file.name || 'Photo' });
+      } catch {
+        reject(new Error('That photo could not be prepared. Try a different one.'));
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('That file could not be read as a photo.'));
+    };
+    img.src = url;
+  });
+}
+
+function shrinkPhoto(img, maxEdge, quality) {
+  const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
 function Logo() {
   return (
     <svg className="logo" viewBox="0 0 32 32" aria-hidden="true">
@@ -123,7 +179,9 @@ export default function App() {
   const [savingKey, setSavingKey] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [pending, setPending] = useState(null);
+  const [attachment, setAttachment] = useState(null);
   const abortRef = useRef(null);
+  const fileRef = useRef(null);
   const scrollerRef = useRef(null);
   const stickRef = useRef(true);
   const composerRef = useRef(null);
@@ -159,7 +217,10 @@ export default function App() {
 
   useEffect(() => {
     try {
-      const stored = messages.filter((message) => message.content).slice(-40);
+      const stored = messages
+        .filter((message) => message.content)
+        .slice(-40)
+        .map(({ image, ...message }) => (image ? { ...message, hadImage: true } : message));
       localStorage.setItem(STORAGE, JSON.stringify(stored));
     } catch {
       /* storage can be unavailable in private browsing */
@@ -189,6 +250,7 @@ export default function App() {
     abortRef.current?.abort();
     setMessages([greeting()]);
     setInput('');
+    setAttachment(null);
     setError('');
     setConfirmClear(false);
   }
@@ -213,7 +275,7 @@ export default function App() {
       if (pending) {
         const next = pending;
         setPending(null);
-        send(next.text, next.subjectId, { force: true });
+        send(next.text, next.subjectId, { force: true, image: next.image || null });
       } else {
         composerRef.current?.focus();
       }
@@ -224,11 +286,13 @@ export default function App() {
     }
   }
 
-  async function send(text, subjectId = subject, { force = false } = {}) {
+  async function send(text, subjectId = subject, { force = false, image = null } = {}) {
     const trimmed = text.trim();
-    if (!trimmed || streaming) return;
+    const photo = image || null;
+    if ((!trimmed && !photo) || streaming) return;
+    const content = trimmed || 'Please look at this photo and help me understand what it could be.';
     if (!configured && !force) {
-      setPending({ text: trimmed, subjectId });
+      setPending({ text: content, subjectId, image: photo });
       setSubject(subjectId);
       setShowKey(true);
       setError('');
@@ -237,12 +301,18 @@ export default function App() {
 
     setSubject(subjectId);
     setInput('');
+    setAttachment(null);
     setError('');
     if (composerRef.current) composerRef.current.style.height = 'auto';
     setConfirmClear(false);
     stickRef.current = true;
 
-    const userMessage = { id: crypto.randomUUID(), role: 'user', content: trimmed };
+    const userMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content,
+      ...(photo ? { image: photo } : {}),
+    };
     const assistantId = crypto.randomUUID();
     const history = [...messages, userMessage];
     setMessages([...history, { id: assistantId, role: 'assistant', content: '' }]);
@@ -259,7 +329,11 @@ export default function App() {
         body: JSON.stringify({
           messages: history
             .filter((message) => !message.local && message.content)
-            .map(({ role, content }) => ({ role, content })),
+            .map(({ role, content, image: photoMessage }) => ({
+              role,
+              content,
+              ...(photoMessage?.dataUrl ? { image: { dataUrl: photoMessage.dataUrl } } : {}),
+            })),
           about: { subject: subjectId, detail: detail.trim() },
         }),
       });
@@ -322,6 +396,19 @@ export default function App() {
     }
   }
 
+  async function onPickPhoto(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || streaming) return;
+    setError('');
+    try {
+      setAttachment(await compressPhoto(file));
+    } catch (err) {
+      setAttachment(null);
+      setError(err.message);
+    }
+  }
+
   function onComposerChange(event) {
     setInput(event.target.value);
     event.target.style.height = 'auto';
@@ -378,6 +465,7 @@ export default function App() {
 
           <section className="panel">
             <h2>Start with a question</h2>
+            <p className="quiet scope-note">Health, mental health, and food. Maddie will leave other topics alone.</p>
             <div className="prompts">
               {PROMPTS.map((prompt) => (
                 <button
@@ -430,7 +518,7 @@ export default function App() {
                 Family Doctor sends each question to OpenAI and bills it to your key. The key stays on this computer. If you remember it, it is written to a local <code>.env</code> file and is not shown again.
               </p>
               <p className="quiet">
-                Do not type information you would not want sent to OpenAI. This chatbot is not a medical record and not a clinical service.
+                Do not type information, or attach a photo, you would not want sent to OpenAI. This chatbot is not a medical record and not a clinical service.
               </p>
               {pending && <p className="quiet">Your question will send as soon as the key is saved.</p>}
               <label className="field">
@@ -479,13 +567,22 @@ export default function App() {
             </form>
           ) : (
             <>
-              <div className="log" ref={scrollerRef} onScroll={onScroll} role="log" aria-label="Visit conversation">
+              <header className="chat-head">
+                <p className="eyebrow dark">Family Doctor</p>
+                <h2>Maddie</h2>
+              </header>
+              <div className="log" ref={scrollerRef} onScroll={onScroll} role="log" aria-label="Visit with Maddie">
                 {messages.map((message) => (
                   <article key={message.id} className={message.role === 'user' ? 'turn mine' : 'turn'}>
-                    <p className="who">{message.role === 'user' ? 'You' : 'Family Doctor'}</p>
+                    <p className="who">{message.role === 'user' ? 'You' : 'Maddie'}</p>
                     <div className="bubble">
+                      {message.image?.dataUrl ? (
+                        <img className="shot" src={message.image.dataUrl} alt="Photo you attached" />
+                      ) : message.hadImage ? (
+                        <p className="photo-note">A photo was attached. It is no longer saved on this device.</p>
+                      ) : null}
                       {message.role === 'assistant' && !message.content ? (
-                        <p className="waiting" aria-label="Family Doctor is thinking">
+                        <p className="waiting" aria-label="Maddie is thinking">
                           <span /><span /><span />
                         </p>
                       ) : (
@@ -499,18 +596,61 @@ export default function App() {
                 className="composer"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  send(input);
+                  send(input, subject, { image: attachment });
                 }}
               >
                 {error && <p className="error" role="alert">{error}</p>}
+                {attachment && (
+                  <div className="staged">
+                    <img src={attachment.dataUrl} alt="" />
+                    <div>
+                      <p>Photo ready for Maddie to look at</p>
+                      <button type="button" className="text" onClick={() => setAttachment(null)}>
+                        Remove photo
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="composer-row">
+                  <input
+                    ref={fileRef}
+                    className="sr"
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    onChange={onPickPhoto}
+                  />
+                  <button
+                    type="button"
+                    className="attach"
+                    aria-label="Attach a photo"
+                    disabled={streaming}
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M8.2 7.4 12 3.6l3.8 3.8M12 4.2v10.2"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.7"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M5 14.5V18a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.7"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
                   <label className="sr" htmlFor="question">Your question</label>
                   <textarea
                     id="question"
                     ref={composerRef}
                     rows={1}
                     value={input}
-                    placeholder="Describe what started, and when"
+                    placeholder="What's going on?"
                     onChange={onComposerChange}
                     onKeyDown={onComposerKeyDown}
                   />
@@ -519,13 +659,13 @@ export default function App() {
                       Stop
                     </button>
                   ) : (
-                    <button type="submit" className="primary" disabled={!input.trim()}>
+                    <button type="submit" className="primary" disabled={!input.trim() && !attachment}>
                       Send
                     </button>
                   )}
                 </div>
                 <p className="disclaimer">
-                  Informational only. This chatbot cannot diagnose, prescribe, or replace a clinician. Questions are sent to OpenAI with your API key.
+                  Informational only. Maddie cannot diagnose, prescribe, or replace a clinician. A photo can suggest possibilities, not a definite answer. Questions and photos are sent to OpenAI with your API key.
                 </p>
               </form>
             </>
